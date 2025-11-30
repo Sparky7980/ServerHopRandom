@@ -1,63 +1,95 @@
--- ULTIMATE SERVER HOPPER (EXPLOIT VERSION)
--- Optimized for Solara, Synapse-Z, Script-Ware M, KRNL, Hydrogen, etc.
+-- Module: ServerHop.lua
+-- ULTIMATE EXPLOIT SERVERHOP MODULE (request version)
 
-local placeId = game.PlaceId
+local ServerHop = {}
+
+local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = game.Players.LocalPlayer
 
--- Request wrapper (supports all executors)
+--------------------------------------------------------------------
+-- Safe wrapper for request() so module works on all executors
+--------------------------------------------------------------------
 local function GET(url)
-    local res = request({
+    local result = request({
         Url = url,
         Method = "GET"
     })
-    return res.Body
+    return result.Body
 end
 
--- Get a NEW public server fast
-local function GetServer()
+--------------------------------------------------------------------
+-- Finds the BEST new public server (lowest players & not current)
+--------------------------------------------------------------------
+function ServerHop:GetBestServer(placeId)
     local cursor = nil
     local bestServer = nil
 
     repeat
-        local url = "https://games.roblox.com/v1/games/"..placeId.."/servers/Public?limit=100"
+        local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?limit=100"
         if cursor then
             url = url .. "&cursor=" .. cursor
         end
 
-        local data = game:GetService("HttpService"):JSONDecode(GET(url))
+        local data
+        
+        local ok, res = pcall(function()
+            return HttpService:JSONDecode(GET(url))
+        end)
 
-        for _, server in ipairs(data.data) do
-            -- fastest check: server not full & not current JobId
+        if not ok then
+            warn("[ServerHop] Failed to get server list:", res)
+            return nil
+        end
+
+        for _, server in ipairs(res.data) do
             if server.playing < server.maxPlayers and server.id ~= game.JobId then
                 
-                -- PRIORITY: lowest player count for fastest load
+                -- pick lower player count first (fastest load)
                 if not bestServer or server.playing < bestServer.playing then
                     bestServer = server
                 end
             end
         end
 
-        cursor = data.nextPageCursor
+        cursor = res.nextPageCursor
     until cursor == nil or bestServer ~= nil
 
     return bestServer and bestServer.id or nil
 end
 
--- Auto-Hop Loop: hops until a new server is found
-local function AutoHop()
+--------------------------------------------------------------------
+-- Teleport one time to a new server
+--------------------------------------------------------------------
+function ServerHop:TeleportOnce(placeId)
+    local newServer = self:GetBestServer(placeId)
+
+    if newServer then
+        TeleportService:TeleportToPlaceInstance(placeId, newServer, LocalPlayer)
+        return true
+    end
+
+    return false
+end
+
+--------------------------------------------------------------------
+-- AUTO-HOP LOOP: tries until successful teleport
+--------------------------------------------------------------------
+function ServerHop:AutoHop(placeId)
     while true do
-        local newServer = GetServer()
+        local newServer = self:GetBestServer(placeId)
+
         if newServer then
-            print("🔥 Hopping to:", newServer)
+            warn("🔥 Auto-hopping to new server:", newServer)
             TeleportService:TeleportToPlaceInstance(placeId, newServer, LocalPlayer)
             break
-        else
-            print("⚠️ No servers found, retrying...")
-            task.wait(1)
         end
+
+        warn("⚠️ No servers found. Retrying in 1s...")
+        task.wait(1)
     end
 end
 
--- Start hop instantly
-AutoHop()
+--------------------------------------------------------------------
+
+return ServerHop
