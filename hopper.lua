@@ -1,95 +1,110 @@
 -- Module: ServerHop.lua
--- ULTIMATE EXPLOIT SERVERHOP MODULE (request version)
-
 local ServerHop = {}
 
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = game.Players.LocalPlayer
 
---------------------------------------------------------------------
--- Safe wrapper for request() so module works on all executors
---------------------------------------------------------------------
+-----------------------------------------
+-- Safe request wrapper
+-----------------------------------------
 local function GET(url)
-    local result = request({
-        Url = url,
-        Method = "GET"
-    })
-    return result.Body
+    local ok, res = pcall(function()
+        return request({
+            Url = url,
+            Method = "GET"
+        })
+    end)
+
+    if not ok or not res or not res.Body then
+        warn("[ServerHop] Request failed:", res)
+        return nil
+    end
+
+    return res.Body
 end
 
---------------------------------------------------------------------
--- Finds the BEST new public server (lowest players & not current)
---------------------------------------------------------------------
+-----------------------------------------
+-- Get BEST server
+-----------------------------------------
 function ServerHop:GetBestServer(placeId)
     local cursor = nil
     local bestServer = nil
 
-    repeat
-        local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?limit=100"
+    while true do
+        local url = "https://games.roblox.com/v1/games/"..placeId.."/servers/Public?limit=100"
         if cursor then
             url = url .. "&cursor=" .. cursor
         end
 
-        local data
-        
-        local ok, res = pcall(function()
-            return HttpService:JSONDecode(GET(url))
-        end)
-
-        if not ok then
-            warn("[ServerHop] Failed to get server list:", res)
+        local body = GET(url)
+        if not body then
+            warn("[ServerHop] No body received.")
             return nil
         end
 
-        for _, server in ipairs(res.data) do
+        local data
+        local ok, decoded = pcall(function()
+            return HttpService:JSONDecode(body)
+        end)
+
+        if not ok or type(decoded) ~= "table" then
+            warn("[ServerHop] JSON decode failed:", body)
+            return nil
+        end
+
+        -- Validate required field
+        if not decoded.data or type(decoded.data) ~= "table" then
+            warn("[ServerHop] API returned invalid data:", decoded)
+            return nil
+        end
+
+        -----------------------------------------
+        -- Loop servers safely
+        -----------------------------------------
+        for _, server in ipairs(decoded.data) do
             if server.playing < server.maxPlayers and server.id ~= game.JobId then
-                
-                -- pick lower player count first (fastest load)
                 if not bestServer or server.playing < bestServer.playing then
                     bestServer = server
                 end
             end
         end
 
-        cursor = res.nextPageCursor
-    until cursor == nil or bestServer ~= nil
+        cursor = decoded.nextPageCursor
+        if not cursor or bestServer then
+            break
+        end
+    end
 
     return bestServer and bestServer.id or nil
 end
 
---------------------------------------------------------------------
--- Teleport one time to a new server
---------------------------------------------------------------------
+-----------------------------------------
+-- Single hop
+-----------------------------------------
 function ServerHop:TeleportOnce(placeId)
-    local newServer = self:GetBestServer(placeId)
+    local srv = self:GetBestServer(placeId)
+    if not srv then return false end
 
-    if newServer then
-        TeleportService:TeleportToPlaceInstance(placeId, newServer, LocalPlayer)
-        return true
-    end
-
-    return false
+    TeleportService:TeleportToPlaceInstance(placeId, srv, LocalPlayer)
+    return true
 end
 
---------------------------------------------------------------------
--- AUTO-HOP LOOP: tries until successful teleport
---------------------------------------------------------------------
+-----------------------------------------
+-- Auto hop loop
+-----------------------------------------
 function ServerHop:AutoHop(placeId)
     while true do
-        local newServer = self:GetBestServer(placeId)
-
-        if newServer then
-            warn("🔥 Auto-hopping to new server:", newServer)
-            TeleportService:TeleportToPlaceInstance(placeId, newServer, LocalPlayer)
-            break
+        local srv = self:GetBestServer(placeId)
+        if srv then
+            warn("🔥 Hopping to:", srv)
+            TeleportService:TeleportToPlaceInstance(placeId, srv, LocalPlayer)
+            return
         end
 
-        warn("⚠️ No servers found. Retrying in 1s...")
+        warn("⚠️ No servers found. Retrying...")
         task.wait(1)
     end
 end
-
---------------------------------------------------------------------
 
 return ServerHop
