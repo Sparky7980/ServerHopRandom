@@ -1,114 +1,70 @@
-local TeleportService = game:GetService("TeleportService")
+local ServerHop = {}
+
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 
-local AllIDs = {}
-local currentHour = os.date("!*t").hour
-local cursor = nil
+-- Gets a NEW server that isn't your current JobId
+function ServerHop:GetNewServer(placeId, currentJobId)
+	local servers = {}
+	local cursor = nil
+	
+	while true do
+		local url
+		
+		if cursor then
+			url = string.format(
+				"https://games.roblox.com/v1/games/%d/servers/Public?limit=100&cursor=%s",
+				placeId,
+				cursor
+			)
+		else
+			url = string.format(
+				"https://games.roblox.com/v1/games/%d/servers/Public?limit=100",
+				placeId
+			)
+		end
 
--- Load file
-local ok, data = pcall(function()
-    return HttpService:JSONDecode(readfile("server-hop-temp.json"))
-end)
+		local success, response = pcall(function()
+			return HttpService:GetAsync(url)
+		end)
 
-if ok and type(data) == "table" then
-    AllIDs = data
-else
-    AllIDs = { currentHour }
-    pcall(function()
-        writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-    end)
+		if not success then
+			warn("[ServerHop] Request failed:", response)
+			break
+		end
+
+		local data = HttpService:JSONDecode(response)
+
+		for _, server in ipairs(data.data) do
+			if server.playing < server.maxPlayers and server.id ~= currentJobId then
+				table.insert(servers, server.id)
+			end
+		end
+
+		if data.nextPageCursor then
+			cursor = data.nextPageCursor
+		else
+			break
+		end
+	end
+
+	if #servers > 0 then
+		return servers[math.random(1, #servers)]
+	end
+
+	return nil
 end
 
--- Reset file if hour changed
-if AllIDs[1] ~= currentHour then
-    AllIDs = { currentHour }
-    pcall(function()
-        writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-    end)
+function ServerHop:Teleport(placeId)
+	local newServer = self:GetNewServer(placeId, game.JobId)
+
+	if newServer then
+		TeleportService:TeleportToPlaceInstance(placeId, newServer, game.Players.LocalPlayer)
+		return true
+	else
+		warn("[ServerHop] No available servers found.")
+		return false
+	end
 end
 
-
---===== MAIN SERVER FINDER =====--
-
-local function GetServers(placeId)
-    local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?limit=100"
-
-    if cursor then
-        url = url .. "&cursor=" .. cursor
-    end
-
-    local success, result = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(url))
-    end)
-
-    if not success then
-        return nil
-    end
-
-    cursor = result.nextPageCursor
-    return result.data
-end
-
-
-local function FindServer(placeId)
-    while true do
-        local servers = GetServers(placeId)
-        if not servers then return nil end
-
-        for _, server in ipairs(servers) do
-            local id = server.id
-            local playing = server.playing
-            local maxPlayers = server.maxPlayers
-
-            -- SKIP FULL SERVERS
-            if playing < maxPlayers then
-
-                local visited = false
-                for _, loggedID in ipairs(AllIDs) do
-                    if tostring(loggedID) == tostring(id) then
-                        visited = true
-                        break
-                    end
-                end
-
-                if not visited then
-                    table.insert(AllIDs, id)
-
-                    pcall(function()
-                        writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-                    end)
-
-                    return id
-                end
-            end
-        end
-
-        -- no server found on this page, go to next
-        if not cursor then
-            return nil
-        end
-
-        task.wait(0.1)
-    end
-end
-
-
---===== MODULE API =====--
-
-local module = {}
-
-function module:Teleport(placeId)
-    while true do
-        local server = FindServer(placeId)
-        if server then
-            TeleportService:TeleportToPlaceInstance(placeId, server, game.Players.LocalPlayer)
-            return
-        end
-
-        -- restart cursor search
-        cursor = nil
-        task.wait(1)
-    end
-end
-
-return module
+return ServerHop
