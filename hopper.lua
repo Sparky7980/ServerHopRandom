@@ -1,70 +1,63 @@
-local ServerHop = {}
+-- ULTIMATE SERVER HOPPER (EXPLOIT VERSION)
+-- Optimized for Solara, Synapse-Z, Script-Ware M, KRNL, Hydrogen, etc.
 
-local HttpService = game:GetService("HttpService")
+local placeId = game.PlaceId
 local TeleportService = game:GetService("TeleportService")
+local LocalPlayer = game.Players.LocalPlayer
 
--- Gets a NEW server that isn't your current JobId
-function ServerHop:GetNewServer(placeId, currentJobId)
-	local servers = {}
-	local cursor = nil
-	
-	while true do
-		local url
-		
-		if cursor then
-			url = string.format(
-				"https://games.roblox.com/v1/games/%d/servers/Public?limit=100&cursor=%s",
-				placeId,
-				cursor
-			)
-		else
-			url = string.format(
-				"https://games.roblox.com/v1/games/%d/servers/Public?limit=100",
-				placeId
-			)
-		end
-
-		local success, response = pcall(function()
-			return HttpService:GetAsync(url)
-		end)
-
-		if not success then
-			warn("[ServerHop] Request failed:", response)
-			break
-		end
-
-		local data = HttpService:JSONDecode(response)
-
-		for _, server in ipairs(data.data) do
-			if server.playing < server.maxPlayers and server.id ~= currentJobId then
-				table.insert(servers, server.id)
-			end
-		end
-
-		if data.nextPageCursor then
-			cursor = data.nextPageCursor
-		else
-			break
-		end
-	end
-
-	if #servers > 0 then
-		return servers[math.random(1, #servers)]
-	end
-
-	return nil
+-- Request wrapper (supports all executors)
+local function GET(url)
+    local res = request({
+        Url = url,
+        Method = "GET"
+    })
+    return res.Body
 end
 
-function ServerHop:Teleport(placeId)
-	local newServer = self:GetNewServer(placeId, game.JobId)
+-- Get a NEW public server fast
+local function GetServer()
+    local cursor = nil
+    local bestServer = nil
 
-	if newServer then
-		TeleportService:TeleportToPlaceInstance(placeId, newServer, game.Players.LocalPlayer)
-		return true
-	else
-		warn("[ServerHop] No available servers found.")
-		return false
-	end
+    repeat
+        local url = "https://games.roblox.com/v1/games/"..placeId.."/servers/Public?limit=100"
+        if cursor then
+            url = url .. "&cursor=" .. cursor
+        end
+
+        local data = game:GetService("HttpService"):JSONDecode(GET(url))
+
+        for _, server in ipairs(data.data) do
+            -- fastest check: server not full & not current JobId
+            if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                
+                -- PRIORITY: lowest player count for fastest load
+                if not bestServer or server.playing < bestServer.playing then
+                    bestServer = server
+                end
+            end
+        end
+
+        cursor = data.nextPageCursor
+    until cursor == nil or bestServer ~= nil
+
+    return bestServer and bestServer.id or nil
 end
 
-return ServerHop
+-- Auto-Hop Loop: hops until a new server is found
+local function AutoHop()
+    while true do
+        local newServer = GetServer()
+        if newServer then
+            print("🔥 Hopping to:", newServer)
+            TeleportService:TeleportToPlaceInstance(placeId, newServer, LocalPlayer)
+            break
+        else
+            print("⚠️ No servers found, retrying...")
+            task.wait(1)
+        end
+    end
+end
+
+-- Start hop instantly
+AutoHop()
